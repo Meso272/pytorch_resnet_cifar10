@@ -12,7 +12,8 @@ import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import resnet
-
+from cifar import cifar10
+from aug import *
 model_names = sorted(name for name in resnet.__dict__
     if name.islower() and not name.startswith("__")
                      and name.startswith("resnet")
@@ -54,7 +55,19 @@ parser.add_argument('--save-dir', dest='save_dir',
                     default='save_temp', type=str)
 parser.add_argument('--save-every', dest='save_every',
                     help='Saves checkpoints at every specified number of epochs',
-                    type=int, default=10)
+                    type=int, default=20)
+parser.add_argument('--mixup', default=0, type=int,
+                     help='using mixup')
+parser.add_argument('--alpha', default=0.4, type=float,
+                     help='alpha for mixup')
+parser.add_argument('--cutoff', default=0, type=int,
+                     help='using cutoff')
+parser.add_argument('--kc', default=16, type=int,
+                     help='K for cutoff')
+parser.add_argument('--standard', default=0, type=int,
+                     help='using standard')
+parser.add_argument('--ks', default=4, type=int,
+                     help='K for standard')
 best_prec1 = 0
 
 
@@ -75,11 +88,14 @@ def main():
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch']
+            try:
+                args.start_epoch = checkpoint['epoch']
+            except:
+                args.start_epoch = 0
             best_prec1 = checkpoint['best_prec1']
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.evaluate, checkpoint['epoch']))
+                  .format(args.evaluate, args.start_epoch))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
@@ -87,28 +103,29 @@ def main():
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
-
+    
+    train_x="../train_x_10000.dat"
+    train_y="../train_y_10000.dat"
+    test_x="../test_x.dat"
+    test_y="../test_y.dat"
+    
     train_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root='./data', train=True, transform=transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
-            transforms.ToTensor(),
-            normalize,
-        ]), download=True),
+        cifar10(train_x,train_y),
         batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True)
+        num_workers=0, pin_memory=True)
 
     val_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root='./data', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])),
+        cifar10(test_x,test_y),
         batch_size=128, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
+        num_workers=0, pin_memory=True)
+    criterion = nn.CrossEntropyLoss().cuda()
+    if args.evaluate:
+        validate(val_loader, model, criterion)
+        return
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda()
-
+    
+    
     if args.half:
         model.half()
         criterion.half()
@@ -127,9 +144,7 @@ def main():
             param_group['lr'] = args.lr*0.1
 
 
-    if args.evaluate:
-        validate(val_loader, model, criterion)
-        return
+    
 
     for epoch in range(args.start_epoch, args.epochs):
 
@@ -166,7 +181,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-
+    alpha=args.alpha
+    kc=args.kc
+    ks=args.ks
     # switch to train mode
     model.train()
 
@@ -181,10 +198,20 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target_var = target
         if args.half:
             input_var = input_var.half()
-
+        if args.standard:
+            input_var=standard(input_var,ks)
+        if args.cutoff:
+            input_var=cutoff(input_var,kc)
+        if args.mixup:
+            input_var,t_1,t_2,lmd=mixup_data(input_var,target_var,alpha)
+            
         # compute output
+
         output = model(input_var)
-        loss = criterion(output, target_var)
+        if args.mixup:
+            loss = mixup_criterion(criterion, output, t_1, t_2, lmd)
+        else:
+            loss = criterion(output, target_var)
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
