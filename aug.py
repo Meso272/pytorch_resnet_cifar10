@@ -23,7 +23,7 @@ def mixup_criterion(criterion, pred, y_1, y_2, lmd):
     return lmd * criterion(pred, y_1) + (1 - lmd) * criterion(pred, y_2)
 
 
-def cutoff(x,K):
+def cutout(x,K):
     batch_size=x.size()[0]
     channel_num=x.size()[1]
     h=x.size()[2]

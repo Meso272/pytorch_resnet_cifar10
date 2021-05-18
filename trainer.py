@@ -22,7 +22,7 @@ model_names = sorted(name for name in resnet.__dict__
 print(model_names)
 
 parser = argparse.ArgumentParser(description='Propert ResNets for CIFAR10 in pytorch')
-parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet32',
+parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet20',
                     choices=model_names,
                     help='model architecture: ' + ' | '.join(model_names) +
                     ' (default: resnet32)')
@@ -56,14 +56,18 @@ parser.add_argument('--save-dir', dest='save_dir',
 parser.add_argument('--save-every', dest='save_every',
                     help='Saves checkpoints at every specified number of epochs',
                     type=int, default=20)
+
+parser.add_argument('--trainlog',help='train log',type=str,default='train.log')
+parser.add_argument('--vallog',help='val log',type=str,default='val.log')
+
 parser.add_argument('--mixup', default=0, type=int,
                      help='using mixup')
 parser.add_argument('--alpha', default=0.4, type=float,
                      help='alpha for mixup')
-parser.add_argument('--cutoff', default=0, type=int,
-                     help='using cutoff')
+parser.add_argument('--cutout', default=0, type=int,
+                     help='using cutout')
 parser.add_argument('--kc', default=16, type=int,
-                     help='K for cutoff')
+                     help='K for cutout')
 parser.add_argument('--standard', default=0, type=int,
                      help='using standard')
 parser.add_argument('--ks', default=4, type=int,
@@ -144,35 +148,39 @@ def main():
             param_group['lr'] = args.lr*0.1
 
 
-    
+    f1=open(args.trainlog,"w")
+    f2=open(args.vallog,"w")
 
     for epoch in range(args.start_epoch, args.epochs):
 
         # train for one epoch
         print('current lr {:.5e}'.format(optimizer.param_groups[0]['lr']))
-        train(train_loader, model, criterion, optimizer, epoch)
+        prec_train,loss_train=train(train_loader, model, criterion, optimizer, epoch)
+        f1.write("%d\t%f\t%f\n"% (epoch,prec_train,loss_train))
         lr_scheduler.step()
+        
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
-
+        prec1,loss1 = validate(val_loader, model, criterion)
+        f2.write("%d\t%f\t%f\n"% (epoch,prec1,loss1))
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
 
-        if epoch > 0 and epoch % args.save_every == 0:
+        if (epoch > 0 and epoch % args.save_every == 0) or epoch==args.epochs-1:
             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
                 'best_prec1': best_prec1,
-            }, is_best, filename=os.path.join(args.save_dir, 'checkpoint.th'))
+            }, True, filename=os.path.join(args.save_dir, 'checkpoint.th'))
 
         save_checkpoint({
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
         }, is_best, filename=os.path.join(args.save_dir, 'model.th'))
 
-
+    f1.close()
+    f2.close()
 def train(train_loader, model, criterion, optimizer, epoch):
     """
         Run one train epoch
@@ -200,8 +208,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
             input_var = input_var.half()
         if args.standard:
             input_var=standard(input_var,ks)
-        if args.cutoff:
-            input_var=cutoff(input_var,kc)
+        if args.cutout:
+            input_var=cutout(input_var,kc)
         if args.mixup:
             input_var,t_1,t_2,lmd=mixup_data(input_var,target_var,alpha)
             
@@ -237,6 +245,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
                   'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
                       epoch, i, len(train_loader), batch_time=batch_time,
                       data_time=data_time, loss=losses, top1=top1))
+            #
+    return top1.avg,losses.avg
 
 
 def validate(val_loader, model, criterion):
@@ -287,12 +297,14 @@ def validate(val_loader, model, criterion):
     print(' * Prec@1 {top1.avg:.3f}'
           .format(top1=top1))
 
-    return top1.avg
+    return top1.avg,losses.avg
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     """
     Save the training model
     """
+    if not is_best:
+        return 
     torch.save(state, filename)
 
 class AverageMeter(object):

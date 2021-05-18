@@ -9,7 +9,7 @@ class cifar10(Dataset):
         self.images=np.fromfile(images,dtype=np.float32).reshape((-1,3,32,32))
         self.labels=np.fromfile(labels,dtype=np.int64)
         self.len=self.images.shape[0]
-        print(np.max(self.images))
+        #print(np.max(self.images))
         for i in range(self.len):
             #print(self.images[i])
 
